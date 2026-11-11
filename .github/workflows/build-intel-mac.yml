@@ -1,0 +1,80 @@
+name: Build Intel macOS (x64)
+
+# Self-contained Intel Mac desktop build for this fork.
+#
+# The upstream pipeline (release.yml + release-desktop.yml) is gated on
+# `github.repository == 'pingdotgg/t3code'` and runs on Blacksmith runners, so
+# it cannot run in a fork. This workflow reproduces the macOS x64 half of it
+# on GitHub-hosted Intel runners: same checkout, same setup action, same
+# `scripts/build-desktop-artifact.ts` entry point. The build is unsigned (no
+# Apple secrets in the fork), so Gatekeeper quarantine must be cleared after
+# install: `xattr -dr com.apple.quarantine "/Applications/T3 Code.app"`.
+#
+# Runs automatically when this file is added or changed (push trigger),
+# or manually: Actions -> Build Intel macOS (x64) -> Run workflow.
+# The DMG and ZIP land both as workflow artifacts and on an `intel-mac-N`
+# prerelease in this repository.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/build-intel-mac.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: T3 Code macOS x64 (Intel)
+    # Last remaining x86_64 GitHub-hosted macOS image (supported until ~Aug 2027).
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      # Same manual checkout as upstream: checkout's credential cleanup runs
+      # `submodule foreach` even with submodules disabled, which fails on the
+      # orphaned gitlinks in the vendored .repos tree. The repo is public, so
+      # no credentials are needed.
+      - name: Checkout
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${GITHUB_SHA}"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Setup dependencies
+        uses: ./.github/actions/setup-ci-deps
+        with:
+          install-args: --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      # x86_64-apple-darwin is the host triple on this runner; the explicit
+      # target just guarantees the std library is present for cargo.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
+
+      # Public T3 Connect identifiers (Clerk publishable key, relay URL), the
+      # same values the official preview channel bakes in.
+      - name: Public T3 Connect configuration
+        run: cp .env.example .env
+
+      # No --signed flag: the script scrubs signing variables and
+      # electron-builder produces an unsigned (ad-hoc signed) DMG + ZIP.
+      - name: Build desktop artifact (unsigned)
+        env:
+          T3CODE_TELEMETRY_CHANNEL: dev
+        run: node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch x64 --verbose
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t3-code-macos-x64
+          path: |
+            release/*.dmg%0
