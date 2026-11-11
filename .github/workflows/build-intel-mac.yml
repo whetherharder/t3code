@@ -21,6 +21,11 @@ on:
     paths:
       - .github/workflows/build-intel-mac.yml
 
+# A fix push cancels the previous (possibly broken) run of this workflow.
+concurrency:
+  group: intel-mac-build
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -77,4 +82,26 @@ jobs:
         with:
           name: t3-code-macos-x64
           path: |
-            release/*.dmg%0
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: intel-mac-${{ github.run_number }}
+          name: "T3 Code — Intel macOS build #${{ github.run_number }}"
+          body: |
+            Unsigned Intel (x86_64) build of T3 Code, commit ${{ github.sha }}.
+
+            Not notarized: after copying to /Applications, run
+            `xattr -dr com.apple.quarantine "/Applications/T3 Code.app"`
+            or right-click the app and choose Open.
+          prerelease: true
+          fail_on_unmatched_files: false
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/*.yml
